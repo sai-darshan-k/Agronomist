@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agronomist Report Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c5aa0 0%, #1e3d72 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header .subtitle {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .controls-section {
+            padding: 30px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .date-controls {
+            display: flex;
+            gap: 20px;
+            align-items: end;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-group label {
+            font-weight: 600;
+            color: #495057;
+            font-size: 14px;
+        }
+
+        .control-group select, 
+        .control-group input[type="date"] {
+            padding: 12px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            font-size: 14px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .control-group select:focus, 
+        .control-group input[type="date"]:focus {
+            outline: none;
+            border-color: #2c5aa0;
+            box-shadow: 0 0 0 3px rgba(44, 90, 160, 0.1);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            color: white;
+            background: linear-gradient(135deg, #2c5aa0 0%, #1e3d72 100%);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(44, 90, 160, 0.3);
+        }
+
+        .assessment-section {
+            padding: 30px;
+        }
+
+        .week-summary {
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .week-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1565c0;
+            margin-bottom: 10px;
+        }
+
+        .day-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 15px;
+            margin-bottom: 25px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        }
+
+        .day-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .day-header {
+            background: linear-gradient(135deg, #2c5aa0 0%, #1e3d72 100%);
+            color: white;
+            padding: 20px;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .day-content {
+            padding: 25px;
+        }
+
+        .farmer-data {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-left: 4px solid #2c5aa0;
+        }
+
+        .data-item {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .data-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .data-question {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 8px;
+        }
+
+        .data-answer {
+            color: #2c5aa0;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .data-followup {
+            color: #6c757d;
+            font-style: italic;
+            margin-bottom: 10px;
+        }
+
+        .photo-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .photo-item {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .photo {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .photo:hover {
+            transform: scale(1.05);
+        }
+
+        .agronomist-assessment {
+            background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .assessment-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: #e65100;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .assessment-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .assessment-btn {
+            padding: 15px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .assessment-btn.all-good {
+            background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+            color: white;
+        }
+
+        .assessment-btn.average {
+            background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+            color: white;
+        }
+
+        .assessment-btn.uncertain {
+            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+            color: white;
+        }
+
+        .assessment-btn.selected {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+
+        .assessment-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .assessment-textbox {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .assessment-textbox.show {
+            display: block;
+        }
+
+        .assessment-textbox label {
+            display: block;
+            font-weight: 600;
+            color: #e65100;
+            margin-bottom: 8px;
+        }
+
+        .assessment-textbox textarea {
+            width: 100%;
+            min-height: 100px;
+            padding: 12px;
+            border: 2px solid #ffcc02;
+            border-radius: 8px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .assessment-textbox textarea:focus {
+            outline: none;
+            border-color: #e65100;
+        }
+
+        .photo-assessment {
+            background: linear-gradient(135deg, #fce4ec 0%, #f8bbd9 100%);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .photo-assessment label {
+            display: block;
+            font-weight: 600;
+            color: #c2185b;
+            margin-bottom: 8px;
+        }
+
+        .photo-assessment textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            border: 2px solid #e91e63;
+            border-radius: 8px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .save-assessment {
+            background: linear-gradient(135deg, #e65100 0%, #bf360c 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 20px;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+            transition: all 0.3s ease;
+        }
+
+        .save-assessment:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(230, 81, 0, 0.3);
+        }
+
+        .no-data {
+            text-align: center;
+            color: #6c757d;
+            font-size: 18px;
+            padding: 60px 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #6c757d;
+            font-size: 18px;
+            padding: 60px 20px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #2c5aa0;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                border-radius: 15px;
+            }
+            
+            .date-controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .assessment-buttons {
+                grid-template-columns: 1fr;
+            }
+            
+            .photo-gallery {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧑‍🔬 Agronomist Assessment Dashboard</h1>
+            <p class="subtitle">Professional Farm Assessment & Recommendations</p>
+        </div>
+
+        <div class="controls-section">
+            <div class="date-controls">
+                <div class="control-group">
+                    <label for="startDate">Start Date</label>
+                    <input type="date" id="startDate">
+                </div>
+                
+                <div class="control-group">
+                    <label for="endDate">End Date</label>
+                    <input type="date" id="endDate">
+                </div>
+                
+                <div class="control-group">
+                    <label for="dateRange">Quick Select</label>
+                    <select id="dateRange" onchange="setDateRange()">
+                        <option value="week">This Week</option>
+                        <option value="lastweek">Last Week</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                </div>
+                
+                <button class="btn" onclick="loadFarmData()">Load Farm Data</button>
+            </div>
+        </div>
+
+        <div class="assessment-section" id="assessmentContainer">
+            <div class="loading">
+                <div class="loading-spinner"></div>
+                <p>Ready to load farm data for assessment...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let farmData = [];
+        let assessments = {};
+
+        // Initialize dates to current week
+        function initializeDates() {
+            const today = new Date();
+            const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+            
+            document.getElementById('endDate').value = today.toISOString().split('T')[0];
+            document.getElementById('startDate').value = oneWeekAgo.toISOString().split('T')[0];
+        }
+
+        function setDateRange() {
+            const range = document.getElementById('dateRange').value;
+            const today = new Date();
+            let startDate, endDate;
+
+            switch(range) {
+                case 'week':
+                    startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    endDate = today;
+                    break;
+                case 'lastweek':
+                    startDate = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000);
+                    endDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    break;
+                case 'custom':
+                    return;
+                default:
+                    return;
+            }
+
+            document.getElementById('startDate').value = startDate.toISOString().split('T')[0];
+            document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
+        }
+
+        async function loadFarmData() {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const assessmentContainer = document.getElementById('assessmentContainer');
+            
+            if (!startDate || !endDate) {
+                alert('Please select both start and end dates');
+                return;
+            }
+
+            if (new Date(startDate) > new Date(endDate)) {
+                alert('Start date cannot be later than end date');
+                return;
+            }
+
+            assessmentContainer.innerHTML = `
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    <p>Loading farm data for assessment...</p>
+                </div>
+            `;
+
+            try {
+                // Fetch data for the date range
+                const allData = [];
+                const currentDate = new Date(startDate);
+                const endDateObj = new Date(endDate);
+
+                while (currentDate <= endDateObj) {
+                    const dateStr = currentDate.toISOString().split('T')[0];
+                    
+                    const response = await fetch('/get_data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            question_type: '',
+                            date: dateStr
+                        })
+                    });
+
+                    if (response.ok) {
+                        const dayData = await response.json();
+                        allData.push(...dayData);
+                    }
+
+                    currentDate.setDate(currentDate.getDate() + 1);
+                }
+
+                farmData = allData;
+                renderAssessmentView(allData, startDate, endDate);
+
+            } catch (error) {
+                console.error('Error loading farm data:', error);
+                assessmentContainer.innerHTML = `
+                    <div class="no-data">
+                        Error loading farm data: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        function renderAssessmentView(data, startDate, endDate) {
+            const assessmentContainer = document.getElementById('assessmentContainer');
+            
+            if (!data || data.length === 0) {
+                assessmentContainer.innerHTML = `
+                    <div class="no-data">
+                        No farm data available for the selected period.
+                        <br><br>
+                        <small>Try adjusting your date range.</small>
+                    </div>
+                `;
+                return;
+            }
+
+            // Group data by date
+            const groupedByDate = {};
+            data.forEach(item => {
+                const date = item.date || 'Unknown Date';
+                if (!groupedByDate[date]) {
+                    groupedByDate[date] = [];
+                }
+                groupedByDate[date].push(item);
+            });
+
+            // Sort dates
+            const sortedDates = Object.keys(groupedByDate).sort((a, b) => 
+                new Date(b) - new Date(a)
+            );
+
+            let html = `
+                <div class="week-summary">
+                    <div class="week-title">Farm Assessment Report</div>
+                    <p>${formatDate(startDate)} - ${formatDate(endDate)}</p>
+                    <p><small>${sortedDates.length} days of data • ${data.length} total entries</small></p>
+                </div>
+            `;
+
+            sortedDates.forEach(date => {
+                const dayData = groupedByDate[date];
+                const dayId = date.replace(/-/g, '_');
+                
+                html += `
+                    <div class="day-card">
+                        <div class="day-header">
+                            ${formatDate(date)} - ${dayData.length} entries
+                        </div>
+                        <div class="day-content">
+                            <div class="farmer-data">
+                                <h4 style="margin-bottom: 15px; color: #2c5aa0;">Farmer Reported Data:</h4>
+                `;
+
+                // Group by question type for the day
+                const typeGroups = {};
+                dayData.forEach(item => {
+                    const type = item.type || 'General';
+                    if (!typeGroups[type]) {
+                        typeGroups[type] = [];
+                    }
+                    typeGroups[type].push(item);
+                });
+
+                Object.entries(typeGroups).forEach(([type, items]) => {
+                    html += `<div style="margin-bottom: 20px;">`;
+                    html += `<h5 style="color: #495057; margin-bottom: 10px; font-size: 16px;">${type}</h5>`;
+                    
+                    items.forEach(item => {
+                        if (item.question || item.answer || item.followup_text || (item.photos && item.photos.length > 0)) {
+                            html += `<div class="data-item">`;
+                            
+                            if (item.question) {
+                                html += `<div class="data-question">${item.question}</div>`;
+                            }
+                            if (item.answer) {
+                                html += `<div class="data-answer">Answer: ${item.answer}</div>`;
+                            }
+                            if (item.followup_text) {
+                                html += `<div class="data-followup">Follow-up: ${item.followup_text}</div>`;
+                            }
+                            
+                            if (item.photos && item.photos.length > 0) {
+                                html += `<div class="photo-gallery">`;
+                                item.photos.forEach((photo, index) => {
+                                    html += `
+                                        <div class="photo-item">
+                                            <img src="${photo.url}" alt="${photo.name || 'Farm Image'}" class="photo" onclick="viewImage('${photo.url}')">
+                                        </div>
+                                    `;
+                                });
+                                html += `</div>`;
+                                
+                                // Add photo assessment section
+                                html += `
+                                    <div class="photo-assessment">
+                                        <label>Photo Analysis & Mitigation Advice:</label>
+                                        <textarea id="photo_${dayId}_${items.indexOf(item)}" placeholder="Describe what you observe in the images and provide recommendations for mitigation or improvement..."></textarea>
+                                    </div>
+                                `;
+                            }
+                            
+                            html += `</div>`;
+                        }
+                    });
+                    html += `</div>`;
+                });
+
+                html += `
+                            </div>
+                            
+                            <div class="agronomist-assessment">
+                                <div class="assessment-header">Agronomist Assessment for ${formatDate(date)}</div>
+                                
+                                <div class="assessment-buttons">
+                                    <button class="assessment-btn all-good" onclick="selectAssessment('${dayId}', 'all-good')">
+                                        ✅ All Good
+                                    </button>
+                                    <button class="assessment-btn average" onclick="selectAssessment('${dayId}', 'average')">
+                                        ⚠️ Average Growth
+                                    </button>
+                                    <button class="assessment-btn uncertain" onclick="selectAssessment('${dayId}', 'uncertain')">
+                                        ❌ Very Uncertain
+                                    </button>
+                                </div>
+                                
+                                <div id="textbox_${dayId}_average" class="assessment-textbox">
+                                    <label>What needs to be improved?</label>
+                                    <textarea id="improvement_${dayId}" placeholder="Describe what needs improvement and your recommendations..."></textarea>
+                                </div>
+                                
+                                <div id="textbox_${dayId}_uncertain" class="assessment-textbox">
+                                    <label>Why are you uncertain and what's your view to improve it?</label>
+                                    <textarea id="uncertainty_${dayId}" placeholder="Explain your concerns and provide recommendations for improvement..."></textarea>
+                                </div>
+                                
+                                <button class="save-assessment" onclick="saveAssessment('${dayId}', '${date}')">
+                                    Save Assessment
+                                </button>
+                                
+                                <div id="message_${dayId}"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            assessmentContainer.innerHTML = html;
+        }
+
+        function selectAssessment(dayId, type) {
+            // Remove previous selections
+            const buttons = document.querySelectorAll(`[onclick*="${dayId}"]`);
+            buttons.forEach(btn => {
+                if (btn.classList.contains('assessment-btn')) {
+                    btn.classList.remove('selected');
+                }
+            });
+            
+            // Add selection to clicked button
+            event.target.classList.add('selected');
+            
+            // Hide all textboxes for this day
+            ['average', 'uncertain'].forEach(boxType => {
+                const textbox = document.getElementById(`textbox_${dayId}_${boxType}`);
+                if (textbox) {
+                    textbox.classList.remove('show');
+                }
+            });
+            
+            // Show relevant textbox
+            if (type === 'average' || type === 'uncertain') {
+                const textbox = document.getElementById(`textbox_${dayId}_${type}`);
+                if (textbox) {
+                    textbox.classList.add('show');
+                }
+            }
+            
+            // Store the assessment type
+            if (!assessments[dayId]) {
+                assessments[dayId] = {};
+            }
+            assessments[dayId].type = type;
+        }
+
+        async function saveAssessment(dayId, date) {
+            const assessment = assessments[dayId];
+            if (!assessment || !assessment.type) {
+                alert('Please select an assessment first');
+                return;
+            }
+            
+            const messageDiv = document.getElementById(`message_${dayId}`);
+            messageDiv.innerHTML = '';
+            
+            try {
+                let assessmentData = {
+                    date: date,
+                    assessment_type: assessment.type,
+                    timestamp: new Date().toISOString()
+                };
+                
+                // Get text feedback based on assessment type
+                if (assessment.type === 'average') {
+                    const improvementText = document.getElementById(`improvement_${dayId}`).value;
+                    if (!improvementText.trim()) {
+                        alert('Please provide improvement recommendations');
+                        return;
+                    }
+                    assessmentData.improvement_notes = improvementText;
+                } else if (assessment.type === 'uncertain') {
+                    const uncertaintyText = document.getElementById(`uncertainty_${dayId}`).value;
+                    if (!uncertaintyText.trim()) {
+                        alert('Please explain your concerns and recommendations');
+                        return;
+                    }
+                    assessmentData.uncertainty_notes = uncertaintyText;
+                }
+                
+                // Get photo analysis notes
+                const photoTextareas = document.querySelectorAll(`[id^="photo_${dayId}_"]`);
+                let photoAnalysis = [];
+                photoTextareas.forEach(textarea => {
+                    if (textarea.value.trim()) {
+                        photoAnalysis.push(textarea.value);
+                    }
+                });
+                
+                if (photoAnalysis.length > 0) {
+                    assessmentData.photo_analysis = photoAnalysis.join(' | ');
+                }
+                
+                // Save to InfluxDB using the same measurement
+                const response = await fetch('/save_agronomist_assessment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(assessmentData)
+                });
+                
+                if (response.ok) {
+                    messageDiv.innerHTML = '<div class="success-message">Assessment saved successfully!</div>';
+                    // Store the saved assessment
+                    assessments[dayId] = { ...assessments[dayId], saved: true };
+                } else {
+                    const error = await response.json();
+                    messageDiv.innerHTML = `<div class="error-message">Error: ${error.error || 'Failed to save assessment'}</div>`;
+                }
+                
+            } catch (error) {
+                console.error('Error saving assessment:', error);
+                messageDiv.innerHTML = `<div class="error-message">Error: ${error.message}</div>`;
+            }
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { 
+                weekday: 'long',
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+        }
+
+        function viewImage(url) {
+            window.open(url, '_blank');
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            initializeDates();
+            setDateRange(); // Set to current week by default
+        });
+    </script>
+</body>
+</html>
