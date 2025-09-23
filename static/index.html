@@ -581,7 +581,7 @@
 
             try {
                 // Fetch data for the date range
-                const allData = [];
+                const dataByDate = {};
                 const currentDate = new Date(startDate);
                 const endDateObj = new Date(endDate);
 
@@ -599,14 +599,14 @@
 
                     if (response.ok) {
                         const dayData = await response.json();
-                        allData.push(...dayData);
+                        dataByDate[dateStr] = dayData;
                     }
 
                     currentDate.setDate(currentDate.getDate() + 1);
                 }
 
-                farmData = allData;
-                renderAssessmentView(allData, startDate, endDate);
+                farmData = Object.values(dataByDate).map(d => d.responses).flat();
+                renderAssessmentView(dataByDate, startDate, endDate);
 
             } catch (error) {
                 console.error('Error loading farm data:', error);
@@ -618,10 +618,10 @@
             }
         }
 
-        function renderAssessmentView(data, startDate, endDate) {
+        function renderAssessmentView(dataByDate, startDate, endDate) {
             const assessmentContainer = document.getElementById('assessmentContainer');
             
-            if (!data || data.length === 0) {
+            if (Object.keys(dataByDate).length === 0) {
                 assessmentContainer.innerHTML = `
                     <div class="no-data">
                         No farm data available for the selected period.
@@ -632,18 +632,8 @@
                 return;
             }
 
-            // Group data by date
-            const groupedByDate = {};
-            data.forEach(item => {
-                const date = item.date || 'Unknown Date';
-                if (!groupedByDate[date]) {
-                    groupedByDate[date] = [];
-                }
-                groupedByDate[date].push(item);
-            });
-
-            // Sort dates
-            const sortedDates = Object.keys(groupedByDate).sort((a, b) => 
+            // Sort dates descending
+            const sortedDates = Object.keys(dataByDate).sort((a, b) => 
                 new Date(b) - new Date(a)
             );
 
@@ -651,12 +641,12 @@
                 <div class="week-summary">
                     <div class="week-title">Farm Assessment Report</div>
                     <p>${formatDate(startDate)} - ${formatDate(endDate)}</p>
-                    <p><small>${sortedDates.length} days of data • ${data.length} total entries</small></p>
+                    <p><small>${sortedDates.length} days of data • ${farmData.length} total entries</small></p>
                 </div>
             `;
 
             sortedDates.forEach(date => {
-                const dayData = groupedByDate[date];
+                const {responses: dayData, weather_summary} = dataByDate[date];
                 const dayId = date.replace(/-/g, '_');
                 
                 html += `
@@ -723,9 +713,19 @@
                     html += `</div>`;
                 });
 
+                html += `</div>`; // Close farmer-data
+
+                // Add weather context
+                if (weather_summary && weather_summary !== "No historical data available for trend analysis.") {
+                    html += `
+                        <div style="background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); border-radius: 8px; padding: 15px; margin: 15px 0;">
+                            <h4 style="color: #2e7d32; margin-bottom: 8px;">📈 24-Hour Historical Context</h4>
+                            <p style="color: #33691e; font-size: clamp(12px, 2.5vw, 14px);">${weather_summary}</p>
+                        </div>
+                    `;
+                }
+
                 html += `
-                            </div>
-                            
                             <div class="agronomist-assessment">
                                 <div class="assessment-header">Agronomist Assessment for ${formatDate(date)}</div>
                                 

@@ -10,17 +10,29 @@ import cloudinary
 import cloudinary.uploader
 import base64
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import dateutil.parser
 from zoneinfo import ZoneInfo
 import traceback
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
+import csv
+import re
+import logging
+import statistics
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 
 # Enable CORS for all routes
 CORS(app)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -93,6 +105,167 @@ EXPECTED_QUESTIONS = {
         'Any wildlife/cattle/animal damage this week?'
     ]
 }
+
+IST = ZoneInfo('Asia/Kolkata')
+
+def get_rain_status(value):
+    if not value or value == "null" or isinstance(value, float) and value != value:  # Check for None, 'null', or NaN
+        return "Unknown"
+    try:
+        value = int(float(value))  # Convert to float first to handle string numbers, then to int
+        if value < 1500:
+            return "Heavy Rain"
+        elif value < 3000:
+            return "Light Rain"
+        return "No Rain"
+    except (ValueError, TypeError):
+        return "Unknown"
+
+def fetch_historical_24h_data(date=None):
+    """Fetch 24-hour historical data for a specific date or current"""
+    logger.info(f"Fetching 24-hour historical data for date: {date}")
+    
+    if date:
+        try:
+            end_local = datetime.strptime(f"{date} 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+            start_local = end_local - timedelta(hours=23, minutes=59, seconds=59)
+            start_utc = start_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
+            end_utc = end_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
+        except ValueError:
+            logger.error(f"Invalid date format: {date}")
+            return []
+    else:
+        end_local = datetime.now(IST)
+        start_local = end_local - timedelta(hours=24)
+        start_utc = start_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
+        end_utc = end_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
+    
+    query = f"""
+        from(bucket: "{INFLUXDB_BUCKET}")
+          |> range(start: {start_utc}, stop: {end_utc})
+          |> filter(fn: (r) => r._measurement == "sensor_data" and r.location == "field")
+          |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+          |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+    """
+    
+    url = f"{INFLUXDB_URL}/api/v2/query?org={INFLUXDB_ORG}"
+    
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Token {INFLUXDB_TOKEN}",
+                "Content-Type": "application/vnd.flux",
+                "Accept": "application/csv",
+            },
+            data=query,
+        )
+
+        if not response.ok:
+            logger.error(f"InfluxDB historical request failed: Status {response.status_code} - {response.text}")
+            return []
+
+        text = response.text
+        lines = text.split("\n")
+        lines = [line for line in lines if line and not line.startswith("#")]
+        
+        if len(lines) < 2:
+            logger.warning("No historical data returned from InfluxDB")
+            return []
+
+        # Parse CSV data
+        historical_data = []
+        header = lines[0].split(",")
+        
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            values = line.split(",")
+            data_point = {}
+            for i, value in enumerate(values):
+                if i < len(header):
+                    key = header[i].strip()
+                    if key == "wind_speed\r":
+                        key = "wind_speed"
+                    
+                    if value and value.strip() and value != "null":
+                        try:
+                            if key == "_time":
+                                data_point[key] = value.strip()
+                            elif key in ["temperature", "humidity", "soil_moisture", "wind_speed", "rain_intensity"]:
+                                data_point[key] = float(value.strip())
+                            elif key == "motion_detected":
+                                data_point[key] = value.strip()
+                            elif key not in ["result", "table", "location"]:
+                                data_point[key] = value.strip()
+                        except (ValueError, TypeError):
+                            continue
+            
+            if data_point and "_time" in data_point:
+                historical_data.append(data_point)
+        
+        logger.info(f"Successfully fetched {len(historical_data)} historical data points")
+        return historical_data
+        
+    except Exception as e:
+        logger.error(f"Error fetching 24-hour historical data: {str(e)}")
+        return []
+
+def analyze_historical_trends(historical_data):
+    """Analyze 24-hour trends and patterns with modified wind and humidity metrics"""
+    if not historical_data:
+        return "No historical data available for trend analysis."
+    
+    try:
+        # Extract values for analysis
+        temps = [d["temperature"] for d in historical_data if "temperature" in d and d["temperature"] is not None]
+        humidities = [d["humidity"] for d in historical_data if "humidity" in d and d["humidity"] is not None]
+        soil_moistures = [d["soil_moisture"] for d in historical_data if "soil_moisture" in d and d["soil_moisture"] is not None]
+        wind_speeds = [d["wind_speed"] for d in historical_data if "wind_speed" in d and d["wind_speed"] is not None]
+        rain_intensities = [d["rain_intensity"] for d in historical_data if "rain_intensity" in d and d["rain_intensity"] is not None]
+        
+        trends = []
+        
+        # Temperature trends
+        if len(temps) >= 2:
+            temp_trend = "increasing" if temps[-1] > temps[0] else "decreasing" if temps[-1] < temps[0] else "stable"
+            avg_temp = statistics.mean(temps)
+            max_temp = max(temps)
+            min_temp = min(temps)
+            trends.append(f"Temperature: {temp_trend} trend, avg {avg_temp:.1f}°C, range {min_temp:.1f}-{max_temp:.1f}°C")
+        
+        # Humidity trends (avg, min, max)
+        if len(humidities) >= 2:
+            avg_humidity = statistics.mean(humidities)
+            min_humidity = min(humidities)
+            max_humidity = max(humidities)
+            trends.append(f"Humidity: avg {avg_humidity:.1f}%, min {min_humidity:.1f}%, max {max_humidity:.1f}%")
+        
+        # Soil moisture trends
+        if len(soil_moistures) >= 2:
+            soil_trend = "increasing" if soil_moistures[-1] > soil_moistures[0] else "decreasing" if soil_moistures[-1] < soil_moistures[0] else "stable"
+            avg_soil = statistics.mean(soil_moistures)
+            trends.append(f"Soil moisture: {soil_trend} trend, avg {avg_soil:.1f}%")
+        
+        # Wind patterns (avg and max only)
+        if len(wind_speeds) >= 2:
+            avg_wind = statistics.mean(wind_speeds)
+            max_wind = max(wind_speeds)
+            trends.append(f"Wind: avg {avg_wind:.1f} m/s, max {max_wind:.1f} m/s")
+        
+        # Rain patterns
+        rain_events = [get_rain_status(r) for r in rain_intensities if r is not None]
+        if rain_events:
+            heavy_rain_hours = rain_events.count("Heavy Rain")
+            light_rain_hours = rain_events.count("Light Rain")
+            no_rain_hours = rain_events.count("No Rain")
+            trends.append(f"Rainfall: {heavy_rain_hours}h heavy, {light_rain_hours}h light, {no_rain_hours}h dry")
+        
+        return " | ".join(trends) if trends else "Limited historical data available for analysis."
+        
+    except Exception as e:
+        logger.error(f"Error analyzing historical trends: {str(e)}")
+        return "Error analyzing historical trends."
 
 # Custom 404 handler
 @app.errorhandler(404)
@@ -333,14 +506,14 @@ def save_responses():
 
 @app.route('/save_agronomist_assessment', methods=['POST'])
 def save_agronomist_assessment():
-    """Save agronomist assessments to the same Vimal_Task measurement"""
+    """Save agronomist assessments to the Vimal_Task measurement with distinct fields"""
     try:
         data = request.json
         date = data.get('date')
         assessment_type = data.get('assessment_type')
         timestamp = data.get('timestamp')
         
-        print(f"Received agronomist assessment: date={date}, type={assessment_type}")
+        print(f"Received agronomist assessment: date={date}, assessment_type={assessment_type}")
         
         if not date or not assessment_type:
             return jsonify({'error': 'Missing required fields: date and assessment_type'}), 400
@@ -373,26 +546,18 @@ def save_agronomist_assessment():
         tag_parts.append(f"date={escape_tag(date)}")
         tag_parts.append(f"type=agronomist_assessment")
         tag_parts.append(f"assessment_type={escape_tag(assessment_type)}")
-        tag_parts.append(f"question_id=agronomist_daily")
+        tag_parts.append(f"question_id=agronomist_daily")  # Unique question_id to avoid overlap
 
         fields = []
-        fields.append(f'assessment="{escape_field(assessment_type)}"')
-        
-        # Add specific notes based on assessment type
         if assessment_type == 'average' and data.get('improvement_notes'):
             improvement_notes = data.get('improvement_notes').strip()
             if improvement_notes:
                 fields.append(f'improvement_notes="{escape_field(improvement_notes)}"')
-                fields.append(f'question="What needs to be improved?"')
         
         elif assessment_type == 'uncertain' and data.get('uncertainty_notes'):
             uncertainty_notes = data.get('uncertainty_notes').strip()
             if uncertainty_notes:
                 fields.append(f'uncertainty_notes="{escape_field(uncertainty_notes)}"')
-                fields.append(f'question="Why are you uncertain and what is your view to improve it?"')
-        
-        elif assessment_type == 'all-good':
-            fields.append(f'question="Overall assessment"')
         
         # Add photo analysis if provided
         if data.get('photo_analysis'):
@@ -400,9 +565,13 @@ def save_agronomist_assessment():
             if photo_analysis:
                 fields.append(f'photo_analysis="{escape_field(photo_analysis)}"')
 
-        # Add agronomist identifier (you can modify this based on your authentication system)
-        fields.append(f'agronomist="system"')  # Replace with actual agronomist ID when you have authentication
+        # Add agronomist identifier (replace with actual ID when authentication is implemented)
+        fields.append(f'agronomist="system"')  # Placeholder for agronomist ID
         
+        if not fields:
+            print("No valid fields provided for agronomist assessment")
+            return jsonify({'error': 'No valid fields provided for assessment'}), 400
+
         line = f'Vimal_Task,{",".join(tag_parts)} {",".join(fields)} {timestamp_ns}'
         print(f"Generated agronomist assessment line: {line}")
 
@@ -417,6 +586,7 @@ def save_agronomist_assessment():
                 |> filter(fn: (r) => r["_measurement"] == "Vimal_Task")
                 |> filter(fn: (r) => r["type"] == "agronomist_assessment")
                 |> filter(fn: (r) => r["date"] == "{date}")
+                |> filter(fn: (r) => r["question_id"] == "agronomist_daily")
                 |> limit(n: 1)
             '''
             tables = query_api.query(query=query, org=INFLUXDB_ORG)
@@ -509,24 +679,28 @@ def get_data():
 
                 # Handle agronomist assessments separately
                 if record_type == 'agronomist_assessment':
-                    assessment = record.values.get('assessment', '')
-                    improvement_notes = record.values.get('improvement_notes', '')
-                    uncertainty_notes = record.values.get('uncertainty_notes', '')
-                    photo_analysis = record.values.get('photo_analysis', '')
-                    question = record.values.get('question', 'Agronomist Assessment')
+                    improvement_notes = unescape_influxdb(record.values.get('improvement_notes', ''))
+                    uncertainty_notes = unescape_influxdb(record.values.get('uncertainty_notes', ''))
+                    photo_analysis = unescape_influxdb(record.values.get('photo_analysis', ''))
+                    agronomist = unescape_influxdb(record.values.get('agronomist', ''))
                     
                     result = {
                         'date': date,
                         'type': 'Agronomist Assessment',
-                        'question': question,
-                        'answer': assessment,
-                        'followup_text': improvement_notes or uncertainty_notes,
+                        'assessment_type': unescape_influxdb(record.values.get('assessment_type', '')),  # From tag
+                        'improvement_notes': improvement_notes,
+                        'uncertainty_notes': uncertainty_notes,
                         'photo_analysis': photo_analysis,
-                        'photos': [],
+                        'agronomist': agronomist,
+                        'photos': [],  # Agronomist assessments may not have photos unless linked
                         'timestamp': record.get_time().isoformat(),
                         'question_id': question_id,
-                        'assessment_type': record.values.get('assessment_type', ''),
-                        'all_fields': {k: v.isoformat() if isinstance(v, datetime) else v for k, v in record.values.items()}
+                        # Include only relevant fields to avoid overlap
+                        'all_fields': {
+                            k: v.isoformat() if isinstance(v, datetime) else v
+                            for k, v in record.values.items()
+                            if k in ['date', 'type', 'assessment_type', 'question_id', 'improvement_notes', 'uncertainty_notes', 'photo_analysis', 'agronomist']
+                        }
                     }
                     results.append(result)
                     continue
@@ -570,6 +744,7 @@ def get_data():
                 serializable_values = {
                     k: v.isoformat() if isinstance(v, datetime) else v
                     for k, v in record.values.items()
+                    if k in ['date', 'type', 'question_id', 'language', 'question', 'answer', 'followup_text', 'photos']
                 }
 
                 result = {
@@ -586,8 +761,13 @@ def get_data():
                 results.append(result)
                 print(f"Added record: question_id={question_id}, photos_count={len(photos)}")
 
+        weather_summary = None
+        if date_filter:
+            historical_data = fetch_historical_24h_data(date_filter)
+            weather_summary = analyze_historical_trends(historical_data)
+
         print(f"Retrieved {len(results)} records with {sum(len(r['photos']) for r in results)} total photos")
-        return jsonify(results), 200
+        return jsonify({'responses': results, 'weather_summary': weather_summary}), 200
     except Exception as e:
         print(f"Error querying InfluxDB: {str(e)}")
         traceback.print_exc()
