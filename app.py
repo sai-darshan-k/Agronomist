@@ -9,7 +9,7 @@ import json
 import cloudinary
 import cloudinary.uploader
 import base64
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import datetime, timedelta
 import dateutil.parser
 from zoneinfo import ZoneInfo
@@ -110,7 +110,7 @@ IST = ZoneInfo('Asia/Kolkata')
 
 def get_rain_status(value):
     if not value or value == "null" or isinstance(value, float) and value != value:  # Check for None, 'null', or NaN
-        return "Unknown"
+        return "No Rain"
     try:
         value = int(float(value))  # Convert to float first to handle string numbers, then to int
         if value < 1500:
@@ -119,32 +119,35 @@ def get_rain_status(value):
             return "Light Rain"
         return "No Rain"
     except (ValueError, TypeError):
-        return "Unknown"
+        return "No Rain"
 
 def fetch_historical_24h_data(date=None):
-    """Fetch 24-hour historical data for a specific date or current"""
-    logger.info(f"Fetching 24-hour historical data for date: {date}")
+    """Fetch raw historical data for the specified day from 12:00 AM to 11:59 PM IST"""
+    logger.info(f"Fetching raw historical data for date: {date}")
     
     if date:
         try:
+            # Set start time to 12:00 AM and end time to 11:59 PM of the specified date in IST
+            start_local = datetime.strptime(f"{date} 00:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
             end_local = datetime.strptime(f"{date} 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
-            start_local = end_local - timedelta(hours=23, minutes=59, seconds=59)
             start_utc = start_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
             end_utc = end_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
         except ValueError:
             logger.error(f"Invalid date format: {date}")
             return []
     else:
+        # For current day, use from 12:00 AM to current time in IST
         end_local = datetime.now(IST)
-        start_local = end_local - timedelta(hours=24)
+        start_local = end_local.replace(hour=0, minute=0, second=0, microsecond=0)
         start_utc = start_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
         end_utc = end_local.astimezone(ZoneInfo('UTC')).isoformat()[:-6] + 'Z'
     
+    # Query raw sensor data without aggregation
     query = f"""
         from(bucket: "{INFLUXDB_BUCKET}")
           |> range(start: {start_utc}, stop: {end_utc})
           |> filter(fn: (r) => r._measurement == "sensor_data" and r.location == "field")
-          |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+          |> filter(fn: (r) => r._field == "temperature" or r._field == "humidity" or r._field == "soil_moisture" or r._field == "wind_speed" or r._field == "rain_intensity")
           |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
     """
     
@@ -166,53 +169,62 @@ def fetch_historical_24h_data(date=None):
             return []
 
         text = response.text
-        lines = text.split("\n")
-        lines = [line for line in lines if line and not line.startswith("#")]
-        
-        if len(lines) < 2:
+        if not text.strip():
             logger.warning("No historical data returned from InfluxDB")
             return []
 
-        # Parse CSV data
+        # Parse CSV data using DictReader
         historical_data = []
-        header = lines[0].split(",")
+        wind_speeds_with_time = []
+        csv_reader = csv.DictReader(StringIO(text), skipinitialspace=True)
         
-        for line in lines[1:]:
-            if not line.strip():
-                continue
-            values = line.split(",")
+        for row in csv_reader:
             data_point = {}
-            for i, value in enumerate(values):
-                if i < len(header):
-                    key = header[i].strip()
-                    if key == "wind_speed\r":
-                        key = "wind_speed"
-                    
-                    if value and value.strip() and value != "null":
+            try:
+                # Parse mandatory fields
+                if '_time' in row and row['_time']:
+                    data_point['_time'] = row['_time'].strip()
+                
+                # Parse numeric fields
+                for field in ['temperature', 'humidity', 'soil_moisture', 'wind_speed', 'rain_intensity']:
+                    if field in row and row[field] and row[field].strip() and row[field] != 'null':
                         try:
-                            if key == "_time":
-                                data_point[key] = value.strip()
-                            elif key in ["temperature", "humidity", "soil_moisture", "wind_speed", "rain_intensity"]:
-                                data_point[key] = float(value.strip())
-                            elif key == "motion_detected":
-                                data_point[key] = value.strip()
-                            elif key not in ["result", "table", "location"]:
-                                data_point[key] = value.strip()
+                            data_point[field] = float(row[field].strip())
                         except (ValueError, TypeError):
+                            logger.warning(f"Invalid {field} value: {row.get(field)} at {row.get('_time')}")
                             continue
+                
+                # Parse motion_detected if present
+                if 'motion_detected' in row and row['motion_detected']:
+                    data_point['motion_detected'] = row['motion_detected'].strip()
+                
+                if data_point and '_time' in data_point:
+                    historical_data.append(data_point)
+                    if 'wind_speed' in data_point:
+                        wind_speeds_with_time.append((data_point['wind_speed'], data_point['_time']))
             
-            if data_point and "_time" in data_point:
-                historical_data.append(data_point)
+            except Exception as e:
+                logger.warning(f"Error parsing row at {row.get('_time')}: {str(e)}")
+                continue
         
-        logger.info(f"Successfully fetched {len(historical_data)} historical data points")
+        # Log top 5 wind speeds for debugging
+        wind_speeds_with_time.sort(reverse=True)
+        top_winds = wind_speeds_with_time[:5]
+        logger.info(f"Top 5 wind speeds: {[(speed, time) for speed, time in top_winds]}")
+        if wind_speeds_with_time:
+            max_wind = max(wind_speeds_with_time, key=lambda x: x[0])[0]
+            max_time = next(t for s, t in wind_speeds_with_time if s == max_wind)
+            logger.info(f"Max wind speed: {max_wind} m/s at {max_time} UTC")
+        
+        logger.info(f"Successfully fetched {len(historical_data)} raw historical data points")
         return historical_data
         
     except Exception as e:
-        logger.error(f"Error fetching 24-hour historical data: {str(e)}")
+        logger.error(f"Error fetching raw historical data: {str(e)}")
         return []
 
 def analyze_historical_trends(historical_data):
-    """Analyze 24-hour trends and patterns with modified wind and humidity metrics"""
+    """Analyze daily trends and patterns with modified wind and rainfall metrics"""
     if not historical_data:
         return "No historical data available for trend analysis."
     
@@ -222,7 +234,7 @@ def analyze_historical_trends(historical_data):
         humidities = [d["humidity"] for d in historical_data if "humidity" in d and d["humidity"] is not None]
         soil_moistures = [d["soil_moisture"] for d in historical_data if "soil_moisture" in d and d["soil_moisture"] is not None]
         wind_speeds = [d["wind_speed"] for d in historical_data if "wind_speed" in d and d["wind_speed"] is not None]
-        rain_intensities = [d["rain_intensity"] for d in historical_data if "rain_intensity" in d and d["rain_intensity"] is not None]
+        rain_intensities = [(d["rain_intensity"], d["_time"]) for d in historical_data if "rain_intensity" in d and d["rain_intensity"] is not None]
         
         trends = []
         
@@ -247,19 +259,36 @@ def analyze_historical_trends(historical_data):
             avg_soil = statistics.mean(soil_moistures)
             trends.append(f"Soil moisture: {soil_trend} trend, avg {avg_soil:.1f}%")
         
-        # Wind patterns (avg and max only)
+        # Wind patterns (avg and max with timestamp in IST)
         if len(wind_speeds) >= 2:
             avg_wind = statistics.mean(wind_speeds)
             max_wind = max(wind_speeds)
-            trends.append(f"Wind: avg {avg_wind:.1f} m/s, max {max_wind:.1f} m/s")
+            max_wind_time = next(d['_time'] for d in historical_data if d.get('wind_speed') == max_wind)
+            max_wind_dt = datetime.fromisoformat(max_wind_time.replace('Z', '+00:00')).astimezone(IST)
+            max_wind_time_ist = max_wind_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+            trends.append(f"Wind: avg {avg_wind:.1f} m/s, max {max_wind:.1f} m/s at {max_wind_time_ist}")
         
-        # Rain patterns
-        rain_events = [get_rain_status(r) for r in rain_intensities if r is not None]
-        if rain_events:
-            heavy_rain_hours = rain_events.count("Heavy Rain")
-            light_rain_hours = rain_events.count("Light Rain")
-            no_rain_hours = rain_events.count("No Rain")
-            trends.append(f"Rainfall: {heavy_rain_hours}h heavy, {light_rain_hours}h light, {no_rain_hours}h dry")
+        # Rain patterns (Yes/No with time of first rain event in IST)
+        if rain_intensities:
+            rain_events = [(get_rain_status(r), t) for r, t in rain_intensities]
+            rain_detected = any(status in ["Heavy Rain", "Light Rain"] for status, _ in rain_events)
+            if rain_detected:
+                # Find the first rain event
+                first_rain = next((t for status, t in rain_events if status in ["Heavy Rain", "Light Rain"]), None)
+                if first_rain:
+                    rain_time_dt = datetime.fromisoformat(first_rain.replace('Z', '+00:00')).astimezone(IST)
+                    rain_time_ist = rain_time_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+                    trends.append(f"Rainfall: Yes at {rain_time_ist}")
+                    logger.info(f"Rain detected at {rain_time_ist}")
+                else:
+                    trends.append("Rainfall: Yes")
+                    logger.info("Rain detected, but no valid timestamp found")
+            else:
+                trends.append("Rainfall: No")
+                logger.info("No rain detected")
+        else:
+            trends.append("Rainfall: No")
+            logger.info("No rain intensity data available")
         
         return " | ".join(trends) if trends else "Limited historical data available for analysis."
         
@@ -267,10 +296,12 @@ def analyze_historical_trends(historical_data):
         logger.error(f"Error analyzing historical trends: {str(e)}")
         return "Error analyzing historical trends."
 
-# Custom 404 handler
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Endpoint not found'}), 404
+def unescape_influxdb(value):
+    """Unescape InfluxDB-escaped strings by removing backslashes before spaces, commas, and equals signs."""
+    if isinstance(value, str):
+        # Replace escaped characters with their unescaped versions
+        return value.replace('\\ ', ' ').replace('\\,', ',').replace('\\=', '=').replace('\\\\', '\\')
+    return value
 
 @app.route('/')
 def serve_index():
@@ -611,13 +642,6 @@ def save_agronomist_assessment():
         traceback.print_exc()
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
-def unescape_influxdb(value):
-    """Unescape InfluxDB-escaped strings by removing backslashes before spaces, commas, and equals signs."""
-    if isinstance(value, str):
-        # Replace escaped characters with their unescaped versions
-        return value.replace('\\ ', ' ').replace('\\,', ',').replace('\\=', '=').replace('\\\\', '\\')
-    return value
-
 @app.route('/get_data', methods=['POST'])
 def get_data():
     try:
@@ -625,23 +649,27 @@ def get_data():
         question_type = data.get('question_type', '')
         date_filter = data.get('date', '')
 
-        print(f"Received request: question_type={question_type}, date_filter={date_filter}")
+        logger.info(f"Received request: question_type={question_type}, date_filter={date_filter}")
 
+        # Validate date format if provided
         if date_filter:
             try:
                 datetime.strptime(date_filter, '%Y-%m-%d')
                 start_time = f"{date_filter}T00:00:00Z"
                 stop_time = f"{date_filter}T23:59:59Z"
             except ValueError:
+                logger.error(f"Invalid date format: {date_filter}")
                 return jsonify({'error': 'Invalid date format, expected YYYY-MM-DD'}), 400
         else:
             start_time = '-30d'
             stop_time = 'now()'
 
+        # Construct the Flux query with fallback for missing question_id
         query = f'''
             from(bucket: "{INFLUXDB_BUCKET}")
                 |> range(start: {start_time}, stop: {stop_time})
                 |> filter(fn: (r) => r._measurement == "Vimal_Task")
+                |> map(fn: (r) => ({{r with question_id: if exists r.question_id then r.question_id else "unknown"}}))
                 |> pivot(rowKey: ["_time", "question_id"], columnKey: ["_field"], valueColumn: "_value")
         '''
         if question_type:
@@ -650,20 +678,42 @@ def get_data():
         if date_filter:
             query += f'|> filter(fn: (r) => r.date == "{date_filter}")'
 
-        print(f"Executing Flux query: {query}")
+        # Debug: Check for records without date filter to diagnose missing data
+        if date_filter:
+            debug_query = f'''
+                from(bucket: "{INFLUXDB_BUCKET}")
+                    |> range(start: {start_time}, stop: {stop_time})
+                    |> filter(fn: (r) => r._measurement == "Vimal_Task")
+                    |> limit(n: 10)
+            '''
+            debug_tables = query_api.query(query=debug_query, org=INFLUXDB_ORG)
+            logger.info(f"Debug query for {date_filter} returned {len(debug_tables)} tables")
+
+        logger.info(f"Executing Flux query: {query}")
         tables = query_api.query(query, org=INFLUXDB_ORG)
 
-        print(f"Total tables from query: {len(tables)}")
+        logger.info(f"Total tables from query: {len(tables)}")
         results = []
         image_urls = {}
+
+        # Define mandatory fields
+        mandatory_fields = ['date', 'type', 'question_id', '_time']
+
         for table in tables:
             for record in table.records:
-                print(f"Processing record: time={record.get_time().isoformat()}, type={record.values.get('type')}, date={record.values.get('date')}, question_id={record.values.get('question_id')}")
+                logger.debug(f"Processing record: time={record.get_time().isoformat()}, type={record.values.get('type')}, date={record.values.get('date')}, question_id={record.values.get('question_id')}")
+
+                # Check for mandatory fields
+                missing_fields = [field for field in mandatory_fields if field not in record.values or record.values[field] is None]
+                if missing_fields:
+                    logger.warning(f"Skipping record due to missing mandatory fields: {missing_fields}, record={record.values}")
+                    continue
 
                 date = record.values.get('date', '')
-                question_id = record.values.get('question_id', '')
+                question_id = record.values.get('question_id', 'unknown')
                 record_type = record.values.get('type', '')
 
+                # Handle image records
                 if record_type == 'image':
                     image_url = record.values.get('image_url')
                     if image_url:
@@ -674,102 +724,88 @@ def get_data():
                             'url': image_url,
                             'name': f"image_{question_id}_{record.get_time().isoformat()}"
                         })
-                        print(f"Stored image: key={key}, url={image_url}")
+                        logger.debug(f"Stored image: key={key}, url={image_url}")
                     continue
 
-                # Handle agronomist assessments separately
-                if record_type == 'agronomist_assessment':
-                    improvement_notes = unescape_influxdb(record.values.get('improvement_notes', ''))
-                    uncertainty_notes = unescape_influxdb(record.values.get('uncertainty_notes', ''))
-                    photo_analysis = unescape_influxdb(record.values.get('photo_analysis', ''))
-                    agronomist = unescape_influxdb(record.values.get('agronomist', ''))
-                    
-                    result = {
-                        'date': date,
-                        'type': 'Agronomist Assessment',
-                        'assessment_type': unescape_influxdb(record.values.get('assessment_type', '')),  # From tag
-                        'improvement_notes': improvement_notes,
-                        'uncertainty_notes': uncertainty_notes,
-                        'photo_analysis': photo_analysis,
-                        'agronomist': agronomist,
-                        'photos': [],  # Agronomist assessments may not have photos unless linked
-                        'timestamp': record.get_time().isoformat(),
-                        'question_id': question_id,
-                        # Include only relevant fields to avoid overlap
-                        'all_fields': {
-                            k: v.isoformat() if isinstance(v, datetime) else v
-                            for k, v in record.values.items()
-                            if k in ['date', 'type', 'assessment_type', 'question_id', 'improvement_notes', 'uncertainty_notes', 'photo_analysis', 'agronomist']
-                        }
-                    }
-                    results.append(result)
-                    continue
-
-                photos = []
-                try:
-                    photos_str = record.values.get('photos', '[]')
-                    # Attempt to fix malformed JSON by removing extra backslashes
-                    photos_str = photos_str.replace('\\"', '"')
-                    photos = json.loads(photos_str) if photos_str else []
-                    print(f"Parsed photos for question_id {question_id}: {photos}")
-                except json.JSONDecodeError as e:
-                    print(f"Error decoding photos JSON for question_id {question_id}: {photos_str}, error: {str(e)}")
-                    # Try to recover by manually parsing the URL
-                    if 'url' in photos_str:
-                        try:
-                            import re
-                            urls = re.findall(r'https?://[^\s"]+', photos_str)
-                            photos = [{'url': url} for url in urls]
-                            print(f"Recovered photos for question_id {question_id}: {photos}")
-                        except Exception as recover_e:
-                            print(f"Failed to recover photos for question_id {question_id}: {str(recover_e)}")
-                            photos = []
-
-                image_key = f"{date}_{question_id}"
-                if image_key in image_urls:
-                    photos.extend(image_urls[image_key])
-                    print(f"Appended {len(image_urls[image_key])} images to photos for {image_key}")
-
-                # Ensure photos is always a list of dicts with 'url' and 'name'
-                photos = [
-                    {'url': photo['url'], 'name': photo.get('name', f"image_{question_id}_{i}")}
-                    for i, photo in enumerate(photos)
-                ]
-
-                # Unescape fields before sending to frontend
-                question = unescape_influxdb(record.values.get('question', ''))
-                answer = unescape_influxdb(record.values.get('answer', ''))
-                followup_text = unescape_influxdb(record.values.get('followup_text', ''))
-
-                serializable_values = {
-                    k: v.isoformat() if isinstance(v, datetime) else v
-                    for k, v in record.values.items()
-                    if k in ['date', 'type', 'question_id', 'language', 'question', 'answer', 'followup_text', 'photos']
-                }
-
+                # Initialize result dictionary with mandatory fields
                 result = {
                     'date': date,
                     'type': record_type.replace('_', ' ').replace(' and ', ' & '),
-                    'question': question,
-                    'answer': answer,
-                    'followup_text': followup_text,
-                    'photos': photos,
-                    'timestamp': record.get_time().isoformat(),
                     'question_id': question_id,
-                    'all_fields': serializable_values
+                    'timestamp': record.get_time().isoformat(),
+                    'question': unescape_influxdb(record.values.get('question', '')),
+                    'answer': unescape_influxdb(record.values.get('answer', '')),
+                    'followup_text': unescape_influxdb(record.values.get('followup_text', '')),
+                    'photos': [],
+                    'all_fields': {}
                 }
-                results.append(result)
-                print(f"Added record: question_id={question_id}, photos_count={len(photos)}")
 
+                # Handle agronomist assessments
+                if record_type == 'agronomist_assessment':
+                    result.update({
+                        'assessment_type': unescape_influxdb(record.values.get('assessment_type', '')),
+                        'improvement_notes': unescape_influxdb(record.values.get('improvement_notes', '')),
+                        'uncertainty_notes': unescape_influxdb(record.values.get('uncertainty_notes', '')),
+                        'photo_analysis': unescape_influxdb(record.values.get('photo_analysis', '')),
+                        'agronomist': unescape_influxdb(record.values.get('agronomist', ''))
+                    })
+
+                # Handle photos
+                photos = []
+                photos_str = record.values.get('photos', '[]')
+                if photos_str and isinstance(photos_str, str):
+                    try:
+                        # Remove extra backslashes and attempt JSON parsing
+                        photos_str = photos_str.replace('\\"', '"').replace('\\ ', ' ')
+                        photos = json.loads(photos_str)
+                        logger.debug(f"Parsed photos for question_id {question_id}: {photos}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Error decoding photos JSON for question_id {question_id}: {photos_str}, error: {str(e)}")
+                        # Attempt to recover URLs
+                        urls = re.findall(r'https?://[^\s"]+', photos_str)
+                        photos = [{'url': url} for url in urls]
+                        logger.debug(f"Recovered photos for question_id {question_id}: {photos}")
+                else:
+                    logger.warning(f"Invalid or missing photos field for question_id {question_id}: {photos_str}")
+                    photos = []
+
+                # Append images from image_urls
+                image_key = f"{date}_{question_id}"
+                if image_key in image_urls:
+                    photos.extend(image_urls[image_key])
+                    logger.debug(f"Appended {len(image_urls[image_key])} images to photos for {image_key}")
+
+                # Ensure photos is a list of dicts with 'url' and 'name'
+                result['photos'] = [
+                    {'url': photo['url'], 'name': photo.get('name', f"image_{question_id}_{i}")}
+                    for i, photo in enumerate(photos) if isinstance(photo, dict) and 'url' in photo
+                ]
+
+                # Include all fields dynamically, excluding internal InfluxDB fields
+                result['all_fields'] = {
+                    k: v.isoformat() if isinstance(v, datetime) else unescape_influxdb(v)
+                    for k, v in record.values.items()
+                    if k not in ['_measurement', '_start', '_stop', 'result', 'table']
+                }
+
+                results.append(result)
+                logger.debug(f"Added record: question_id={question_id}, photos_count={len(result['photos'])}")
+
+        # Fetch weather summary for the specified date
         weather_summary = None
         if date_filter:
             historical_data = fetch_historical_24h_data(date_filter)
             weather_summary = analyze_historical_trends(historical_data)
 
-        print(f"Retrieved {len(results)} records with {sum(len(r['photos']) for r in results)} total photos")
-        return jsonify({'responses': results, 'weather_summary': weather_summary}), 200
+        logger.info(f"Retrieved {len(results)} records with {sum(len(r['photos']) for r in results)} total photos")
+        return jsonify({
+            'responses': results,
+            'weather_summary': weather_summary,
+            'message': f"Retrieved {len(results)} records for date {date_filter}" if date_filter else f"Retrieved {len(results)} records"
+        }), 200
+
     except Exception as e:
-        print(f"Error querying InfluxDB: {str(e)}")
+        logger.error(f"Error querying InfluxDB: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': f'Failed to query InfluxDB: {str(e)}'}), 500
 
